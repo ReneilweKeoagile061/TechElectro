@@ -1,4 +1,4 @@
-﻿# TechElectro Inc. — Inventory Optimization Dashboard
+﻿# TechElectro Inc. Inventory Optimization Dashboard
 
 Data-driven inventory optimization project for TechElectro Inc., addressing overstocking, understocking, and customer satisfaction risk through SQL Server analytics and an interactive Streamlit dashboard.
 
@@ -110,4 +110,4 @@ Full rationale with alternatives considered: [`methodology_decisions.md`](./meth
 
 ## 8. Business Value
 
-This project directly targets TechElectro's stated problem: overstocking and understocking eroding customer satisfaction and tying up capital. The dashboard gives management a live, filterable view of both risks simultaneously — capital at risk from slow-moving stock, and reorder urgency for fast-moving stock — with adjustable service-level and lead-time assumptions so recommendations can be tuned to real supplier terms as that data becomes available.
+This project directly targets TechElectro's stated problem: overstocking and understocking eroding customer satisfaction and tying up capital. The dashboard gives management a live, filterable view of both risks simultaneously, capital at risk from slow-moving stock, and reorder urgency for fast-moving stock, with adjustable service-level and lead-time assumptions so recommendations can be tuned to real supplier terms as that data becomes available.
