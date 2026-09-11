@@ -238,53 +238,51 @@ def _safe_error_message(exc: Exception) -> str:
 
 
 @st.cache_resource(show_spinner=False)
-def get_db_connection():
+def get_db_connection() -> Optional[pyodbc.Connection]:
     """
-    Connection priority:
-      1. pymssql → Azure SQL (works on Streamlit Cloud Linux with FreeTDS)
-      2. pyodbc  → localhost Windows Integrated Auth (works locally only)
-    Real errors are shown via st.error() for one deployment cycle of diagnosis.
+    Connect to SQL Server:
+      1. Try Azure SQL (Streamlit Cloud) with Driver 18, then Driver 17.
+      2. Fallback to localhost (Windows dev) with Windows Integrated Auth.
     """
     global LAST_DB_ERROR
     LAST_DB_ERROR = None
-
     server, database, username, password = _get_sql_config()
 
-    # --- Priority 1: pymssql to Azure SQL (Streamlit Cloud path) ---
-    if _USE_PYMSSQL and all([server, database, username, password]):
-        try:
-            conn = pymssql.connect(
-                server=server,
-                user=username,
-                password=password,
-                database=database,
-                timeout=15,
-                login_timeout=15,
-            )
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-                cur.fetchone()
-            return conn
-        except Exception as exc:
-            LAST_DB_ERROR = _safe_error_message(exc)
-            # Surface real error — remove st.error line once working.
-            st.error(f"[DB] pymssql Azure SQL failed — {type(exc).__name__}: {LAST_DB_ERROR}")
-            return None
-
-    # --- Priority 2: pyodbc to localhost (local Windows dev path) ---
-    if not _USE_PYMSSQL:
-        for local_cs in [
-            "DRIVER={ODBC Driver 18 for SQL Server};SERVER=localhost;DATABASE=tech_electro;Trusted_Connection=yes;TrustServerCertificate=yes;Connection Timeout=5;",
-            "DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost;DATABASE=tech_electro;Trusted_Connection=yes;Connection Timeout=5;",
-        ]:
+    # --- Priority 1: Azure SQL ---
+    if all([server, database, username, password]):
+        azure_attempts = [
+            f"DRIVER={{ODBC Driver 18 for SQL Server}};SERVER={server};DATABASE={database};UID={username};PWD={password};Encrypt=yes;TrustServerCertificate=no;Connection Timeout=15;",
+            f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={database};UID={username};PWD={password};Encrypt=yes;TrustServerCertificate=no;Connection Timeout=15;"
+        ]
+        for cs in azure_attempts:
             try:
-                conn = pyodbc.connect(local_cs, timeout=5)
+                conn = pyodbc.connect(cs, timeout=15)
                 with conn.cursor() as cur:
                     cur.execute("SELECT 1")
                     cur.fetchone()
                 return conn
-            except Exception:
+            except Exception as exc:
+                LAST_DB_ERROR = _safe_error_message(exc)
                 continue
+        
+        # If we exhausted Azure attempts, log the last failure
+        st.error(f"[DB] Azure SQL connection failed (tried Driver 18 & 17). Last error: {LAST_DB_ERROR}")
+        return None
+
+    # --- Priority 2: Localhost fallback ---
+    local_attempts = [
+        "DRIVER={ODBC Driver 18 for SQL Server};SERVER=localhost;DATABASE=tech_electro;Trusted_Connection=yes;TrustServerCertificate=yes;Connection Timeout=5;",
+        "DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost;DATABASE=tech_electro;Trusted_Connection=yes;Connection Timeout=5;",
+    ]
+    for cs in local_attempts:
+        try:
+            conn = pyodbc.connect(cs, timeout=5)
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+            return conn
+        except Exception:
+            continue
 
     LAST_DB_ERROR = "No database connection available. Check secrets or local SQL Server."
     st.error(f"[DB] {LAST_DB_ERROR}")
