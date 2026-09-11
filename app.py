@@ -5,8 +5,16 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import pyodbc
 import streamlit as st
+
+# pymssql works on both Linux (Streamlit Cloud) and Windows.
+# pyodbc is used as a local-only fallback when pymssql is unavailable.
+try:
+    import pymssql
+    _USE_PYMSSQL = True
+except ImportError:
+    import pyodbc
+    _USE_PYMSSQL = False
 
 
 # =============================================================================
@@ -230,60 +238,57 @@ def _safe_error_message(exc: Exception) -> str:
 
 
 @st.cache_resource(show_spinner=False)
-def get_db_connection() -> Optional[pyodbc.Connection]:
+def get_db_connection():
     """
-    Diagnostic connection function.
-    Priority 1 — Local SQL Server (Windows Integrated Auth, works offline/locally).
-    Priority 2 — Azure SQL via Streamlit secrets (used on Streamlit Community Cloud).
-    The real exception is surfaced via st.error() so deployment failures
-    can be diagnosed from the Streamlit Cloud UI and logs.
+    Connection priority:
+      1. pymssql → Azure SQL (works on Streamlit Cloud Linux with FreeTDS)
+      2. pyodbc  → localhost Windows Integrated Auth (works locally only)
+    Real errors are shown via st.error() for one deployment cycle of diagnosis.
     """
     global LAST_DB_ERROR
     LAST_DB_ERROR = None
 
-    # --- Priority 1: local SQL Server (no credentials needed, Windows auth) ---
-    for local_cs in [
-        "DRIVER={ODBC Driver 18 for SQL Server};SERVER=localhost;DATABASE=tech_electro;Trusted_Connection=yes;TrustServerCertificate=yes;Connection Timeout=5;",
-        "DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost;DATABASE=tech_electro;Trusted_Connection=yes;Connection Timeout=5;",
-    ]:
+    server, database, username, password = _get_sql_config()
+
+    # --- Priority 1: pymssql to Azure SQL (Streamlit Cloud path) ---
+    if _USE_PYMSSQL and all([server, database, username, password]):
         try:
-            conn = pyodbc.connect(local_cs, timeout=5)
+            conn = pymssql.connect(
+                server=server,
+                user=username,
+                password=password,
+                database=database,
+                timeout=15,
+                login_timeout=15,
+            )
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
                 cur.fetchone()
             return conn
-        except Exception:
-            continue
+        except Exception as exc:
+            LAST_DB_ERROR = _safe_error_message(exc)
+            # Surface real error — remove st.error line once working.
+            st.error(f"[DB] pymssql Azure SQL failed — {type(exc).__name__}: {LAST_DB_ERROR}")
+            return None
 
-    # --- Priority 2: Azure SQL from Streamlit secrets ---
-    server, database, username, password = _get_sql_config()
+    # --- Priority 2: pyodbc to localhost (local Windows dev path) ---
+    if not _USE_PYMSSQL:
+        for local_cs in [
+            "DRIVER={ODBC Driver 18 for SQL Server};SERVER=localhost;DATABASE=tech_electro;Trusted_Connection=yes;TrustServerCertificate=yes;Connection Timeout=5;",
+            "DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost;DATABASE=tech_electro;Trusted_Connection=yes;Connection Timeout=5;",
+        ]:
+            try:
+                conn = pyodbc.connect(local_cs, timeout=5)
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    cur.fetchone()
+                return conn
+            except Exception:
+                continue
 
-    if not all([server, database, username, password]):
-        LAST_DB_ERROR = "Azure SQL secrets not configured (server / database / username / password missing)."
-        st.error(f"[DB] {LAST_DB_ERROR}")
-        return None
-
-    connection_string = (
-        "DRIVER={ODBC Driver 18 for SQL Server};"
-        f"SERVER={server};"
-        f"DATABASE={database};"
-        f"UID={username};"
-        f"PWD={password};"
-        "Encrypt=yes;"
-        "TrustServerCertificate=no;"
-        "Connection Timeout=15;"
-    )
-    try:
-        conn = pyodbc.connect(connection_string, timeout=15)
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
-            cur.fetchone()
-        return conn
-    except Exception as exc:
-        LAST_DB_ERROR = _safe_error_message(exc)
-        # Surfaces the REAL error in the UI — remove the line below once root cause is identified.
-        st.error(f"[DB] Azure SQL connection failed — {type(exc).__name__}: {LAST_DB_ERROR}")
-        return None
+    LAST_DB_ERROR = "No database connection available. Check secrets or local SQL Server."
+    st.error(f"[DB] {LAST_DB_ERROR}")
+    return None
 
 
 # =============================================================================
