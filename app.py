@@ -1,11 +1,11 @@
 import os
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import pymssql
+import pyodbc
 import streamlit as st
 
 
@@ -35,8 +35,8 @@ st.markdown(
             --gray-200: #e5e5ea;
             --gray-600: #636366;
             --gray-800: #1d1d1f;
-            --red: #e74c3c;
-            --amber: #d97706;
+            --red: #c0392b;
+            --amber: #b45309;
             --blue: #0284c7;
         }
 
@@ -104,6 +104,7 @@ st.markdown(
             border-radius: 16px;
             padding: 22px;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+            margin-bottom: 16px;
         }
 
         .metric-card {
@@ -145,6 +146,14 @@ st.markdown(
             color: var(--gray-600);
             margin-bottom: 12px;
         }
+
+        .status-pill {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 0.72rem;
+            font-weight: 700;
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -152,91 +161,194 @@ st.markdown(
 
 
 # =============================================================================
-# Database configuration and connection
+# Database configuration
 # =============================================================================
 def _get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
-    """Read a flat Streamlit secret, with an environment-variable fallback."""
+    """Read a Streamlit secret with an environment-variable fallback."""
     try:
-        if name in st.secrets:
-            val = st.secrets[name]
-            if val is not None:
-                return str(val)
+        value = st.secrets.get(name)
+        if value not in (None, ""):
+            return str(value).strip()
     except Exception:
         pass
-    return os.getenv(name, default)
+
+    value = os.getenv(name, default)
+    return str(value).strip() if value not in (None, "") else default
 
 
-def _get_sql_config() -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
-    server = _get_secret("server") or _get_secret("AZURE_SQL_SERVER")
-    database = _get_secret("database", "tech_electro") or _get_secret("AZURE_SQL_DATABASE", "tech_electro")
-    username = _get_secret("username") or _get_secret("AZURE_SQL_USERNAME")
-    password = _get_secret("password") or _get_secret("AZURE_SQL_PASSWORD")
+def _get_sql_config() -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+    """Return Azure SQL settings.
+
+    Preferred Streamlit Secrets format:
+        server = "your-server.database.windows.net"
+        database = "tech_electro"
+        username = "your-login"
+        password = "your-password"
+
+    A legacy [azure_sql] section and AZURE_SQL_* environment variables are
+    also supported for local development/backward compatibility.
+    """
+    server = database = username = password = None
+
+    # Backward-compatible nested secrets.
+    try:
+        sql_cfg = st.secrets.get("azure_sql", {})
+        if hasattr(sql_cfg, "get"):
+            server = sql_cfg.get("server")
+            database = sql_cfg.get("database")
+            username = sql_cfg.get("username")
+            password = sql_cfg.get("password")
+    except Exception:
+        pass
+
+    server = server or _get_secret("server") or _get_secret("AZURE_SQL_SERVER")
+    database = (
+        database
+        or _get_secret("database")
+        or _get_secret("AZURE_SQL_DATABASE")
+        or "tech_electro"
+    )
+    username = username or _get_secret("username") or _get_secret("AZURE_SQL_USERNAME")
+    password = password or _get_secret("password") or _get_secret("AZURE_SQL_PASSWORD")
 
     return server, database, username, password
 
 
+# Kept outside cached functions so the UI can show a useful non-secret error.
+LAST_DB_ERROR: Optional[str] = None
+LAST_QUERY_ERROR: Optional[str] = None
+
+
+def _safe_error_message(exc: Exception) -> str:
+    """Return a useful database error without exposing credentials."""
+    message = " ".join(str(exc).split())
+    # Never display the password if a driver happens to echo connection details.
+    _, _, _, password = _get_sql_config()
+    if password:
+        message = message.replace(password, "********")
+    return message[:1000] or type(exc).__name__
+
+
 @st.cache_resource(show_spinner=False)
-def get_db_connection() -> Optional["pymssql.Connection"]:
-    """Create and cache an encrypted Azure SQL connection via FreeTDS (pymssql)."""
+def get_db_connection() -> Optional[pyodbc.Connection]:
+    """Create and cache an encrypted Azure SQL connection using ODBC Driver 18."""
+    global LAST_DB_ERROR
+    LAST_DB_ERROR = None
+
     server, database, username, password = _get_sql_config()
 
     if not all([server, database, username, password]):
+        LAST_DB_ERROR = "One or more Azure SQL connection settings are missing."
         return None
 
+    connection_string = (
+        "DRIVER={ODBC Driver 18 for SQL Server};"
+        f"SERVER={server};"
+        f"DATABASE={database};"
+        f"UID={username};"
+        f"PWD={password};"
+        "Encrypt=yes;"
+        "TrustServerCertificate=no;"
+        "Connection Timeout=15;"
+    )
+
     try:
-        return pymssql.connect(
-            server=server,
-            user=username,
-            password=password,
-            database=database,
-            timeout=15,
-            login_timeout=15,
-        )
-    except Exception:
+        connection = pyodbc.connect(connection_string, timeout=15)
+        # Lightweight validation prevents a stale cached connection from being
+        # treated as healthy when the underlying TCP connection has disappeared.
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+        return connection
+    except Exception as exc:
+        LAST_DB_ERROR = _safe_error_message(exc)
         return None
+
+
+# =============================================================================
+# Data loading
+# =============================================================================
+INVENTORY_QUERY = """
+    SELECT
+        s.sales_id,
+        s.product_id,
+        p.product_category,
+        p.promotions,
+        s.sales_date,
+        s.inventory_quantity,
+        s.product_cost,
+        e.gdp,
+        e.inflation_rate,
+        e.seasonal_factor
+    FROM sales_data AS s
+    INNER JOIN product_information AS p
+        ON s.product_id = p.product_id
+    LEFT JOIN external_factors AS e
+        ON s.sales_date = e.sales_date;
+"""
 
 
 @st.cache_data(ttl=300, show_spinner="Loading inventory data…")
 def load_data() -> Optional[pd.DataFrame]:
-    """Load the dashboard dataset from Azure SQL."""
+    """Load and clean the dashboard dataset from Azure SQL."""
+    global LAST_QUERY_ERROR
+    LAST_QUERY_ERROR = None
+
     conn = get_db_connection()
     if conn is None:
         return None
 
-    query = """
-        SELECT
-            s.sales_id,
-            s.product_id,
-            p.product_category,
-            p.promotions,
-            s.sales_date,
-            s.inventory_quantity,
-            s.product_cost,
-            e.gdp,
-            e.inflation_rate,
-            e.seasonal_factor
-        FROM sales_data AS s
-        INNER JOIN product_information AS p
-            ON s.product_id = p.product_id
-        LEFT JOIN external_factors AS e
-            ON s.sales_date = e.sales_date;
-    """
-
     try:
-        df = pd.read_sql(query, conn)
+        df = pd.read_sql(INVENTORY_QUERY, conn)
+
+        required_columns = {
+            "product_id",
+            "product_category",
+            "sales_date",
+            "inventory_quantity",
+        }
+        missing = required_columns.difference(df.columns)
+        if missing:
+            LAST_QUERY_ERROR = f"The SQL query did not return required columns: {', '.join(sorted(missing))}."
+            return None
+
         df["sales_date"] = pd.to_datetime(df["sales_date"], errors="coerce")
         df["inventory_quantity"] = pd.to_numeric(df["inventory_quantity"], errors="coerce")
         df["product_cost"] = pd.to_numeric(df["product_cost"], errors="coerce")
-        df = df.dropna(subset=["product_id", "product_category", "sales_date", "inventory_quantity"])
-        return df
-    except Exception:
+
+        for column in ["gdp", "inflation_rate", "seasonal_factor"]:
+            if column in df.columns:
+                df[column] = pd.to_numeric(df[column], errors="coerce")
+
+        df["product_category"] = df["product_category"].astype("string").str.strip()
+        df["promotions"] = df["promotions"].astype("string").str.strip()
+
+        df = df.dropna(
+            subset=[
+                "product_id",
+                "product_category",
+                "sales_date",
+                "inventory_quantity",
+            ]
+        )
+
+        return df.reset_index(drop=True)
+
+    except Exception as exc:
+        LAST_QUERY_ERROR = _safe_error_message(exc)
         return None
 
 
 # =============================================================================
 # Reusable UI helpers
 # =============================================================================
-def render_metric_card(label: str, value: str, note: str, accent: str, note_color: str) -> None:
+def render_metric_card(
+    label: str,
+    value: str,
+    note: str,
+    accent: str,
+    note_color: str,
+) -> None:
     st.markdown(
         f"""
         <div class="metric-card" style="border-top:4px solid {accent};">
@@ -254,27 +366,42 @@ def chart_layout(fig: go.Figure, height: int = 320) -> go.Figure:
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(t=10, b=10, l=10, r=10),
+        margin=dict(t=20, b=20, l=20, r=20),
         height=height,
         font=dict(family="Arial, sans-serif", color="#1d1d1f"),
         hoverlabel=dict(bgcolor="white"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
+    fig.update_xaxes(showgrid=False, zeroline=False)
+    fig.update_yaxes(gridcolor="rgba(0,0,0,0.08)", zeroline=False)
     return fig
 
 
-# =============================================================================
-# Load data
-# =============================================================================
-df_raw = load_data()
+def card_start(title: str, subtitle: str) -> None:
+    st.markdown(
+        f"""
+        <div class="apple-card">
+            <div class="section-title">{title}</div>
+            <div class="section-subtitle">{subtitle}</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def card_end() -> None:
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # =============================================================================
-# Sidebar
+# Sidebar branding
 # =============================================================================
 st.sidebar.markdown(
     """
     <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
-        <div style="width:36px; height:36px; border-radius:8px; background:linear-gradient(135deg,#1e8a3c,#39b54a); display:flex; align-items:center; justify-content:center; color:white; font-weight:800;">TE</div>
+        <div style="width:36px; height:36px; border-radius:8px;
+                    background:linear-gradient(135deg,#1e8a3c,#39b54a);
+                    display:flex; align-items:center; justify-content:center;
+                    color:white; font-weight:800;">TE</div>
         <div>
             <div style="font-weight:700; color:#1d1d1f;">TechElectro</div>
             <div style="font-size:0.68rem; color:#636366;">Inventory Analytics</div>
@@ -290,12 +417,19 @@ st.sidebar.markdown(
 # =============================================================================
 st.markdown(
     """
-    <div class="apple-card" style="margin-bottom:20px; display:flex; justify-content:space-between; align-items:center; gap:20px;">
+    <div class="apple-card" style="display:flex; justify-content:space-between;
+         align-items:center; gap:20px;">
         <div>
-            <div style="font-size:1.3rem; font-weight:700; color:#1d1d1f;">TechElectro Inventory Optimization Platform</div>
-            <div style="font-size:0.8rem; color:#636366; margin-top:2px;">Data-driven supply chain management, stockout prevention & working capital analytics</div>
+            <div style="font-size:1.3rem; font-weight:700; color:#1d1d1f;">
+                TechElectro Inventory Optimization Platform
+            </div>
+            <div style="font-size:0.8rem; color:#636366; margin-top:2px;">
+                Data-driven supply chain management, stockout prevention & working capital analytics
+            </div>
         </div>
-        <div style="background:#e6f4e9; color:#166e2f; padding:4px 12px; border-radius:20px; font-size:0.75rem; font-weight:700; white-space:nowrap;">
+        <div style="background:#e6f4e9; color:#166e2f; padding:4px 12px;
+                    border-radius:20px; font-size:0.75rem; font-weight:700;
+                    white-space:nowrap;">
             Azure SQL Pipeline
         </div>
     </div>
@@ -305,20 +439,35 @@ st.markdown(
 
 
 # =============================================================================
+# Load data
+# =============================================================================
+df_raw = load_data()
+
+
+# =============================================================================
 # Connection/data error states
 # =============================================================================
 if df_raw is None:
     server, database, username, password = _get_sql_config()
+
     if not all([server, database, username, password]):
         st.error(
-            "Azure SQL is not configured. Add `server`, `database`, `username`, and `password` "
-            "to Streamlit Cloud Secrets."
+            "Azure SQL is not configured. Add `server`, `database`, `username`, "
+            "and `password` to Streamlit Cloud Secrets."
         )
+    elif LAST_QUERY_ERROR:
+        st.error("Azure SQL connected, but the dashboard query could not be loaded.")
+        with st.expander("Technical error details"):
+            st.code(LAST_QUERY_ERROR)
     else:
         st.error(
             "The Azure SQL connection could not be established. Check the server name, "
-            "credentials, database permissions, and Azure SQL firewall rules."
+            "credentials, database permissions, ODBC Driver 18, and Azure SQL firewall rules."
         )
+        if LAST_DB_ERROR:
+            with st.expander("Technical error details"):
+                st.code(LAST_DB_ERROR)
+
     st.stop()
 
 
@@ -390,16 +539,16 @@ if st.sidebar.button("Refresh Data", use_container_width=True):
 df = df_raw[df_raw["product_category"].isin(selected_categories)].copy()
 
 if promo_filter == "Promoted Only (Yes)":
-    df = df[df["promotions"].astype(str).str.strip().str.lower() == "yes"]
+    df = df[df["promotions"].fillna("").astype(str).str.lower().eq("yes")]
 elif promo_filter == "Non-Promoted (No)":
-    df = df[df["promotions"].astype(str).str.strip().str.lower() == "no"]
+    df = df[df["promotions"].fillna("").astype(str).str.lower().eq("no")]
 
 if search_sku.strip():
     try:
-        df = df[df["product_id"] == int(search_sku.strip())]
+        sku_value = int(search_sku.strip())
+        df = df[df["product_id"] == sku_value]
     except ValueError:
         st.sidebar.warning("Product ID must be numeric.")
-
 
 if df.empty:
     st.info("No records match the current filters. Adjust the sidebar filters and try again.")
@@ -418,7 +567,6 @@ cat_stats = (
     )
     .reset_index()
 )
-
 cat_stats["category_stdev"] = cat_stats["category_stdev"].fillna(0)
 
 df_sku = (
@@ -438,9 +586,13 @@ df_sku = df_sku.merge(
 
 df_sku["sku_cost"] = df_sku["sku_cost"].fillna(0)
 df_sku["capital_tied_up"] = df_sku["sku_demand"] * df_sku["sku_cost"]
-df_sku["is_overstock"] = df_sku["sku_demand"] < (df_sku["avg_demand"] * overstock_ratio)
+df_sku["is_overstock"] = df_sku["sku_demand"] < (
+    df_sku["avg_demand"] * overstock_ratio
+)
 df_sku["lead_time_demand"] = df_sku["sku_demand"] * lead_time_days
-df_sku["safety_stock"] = z_score * df_sku["category_stdev"] * np.sqrt(lead_time_days)
+df_sku["safety_stock"] = (
+    z_score * df_sku["category_stdev"] * np.sqrt(lead_time_days)
+)
 df_sku["reorder_point"] = df_sku["lead_time_demand"] + df_sku["safety_stock"]
 
 overstock_df = df_sku[df_sku["is_overstock"]].sort_values(
@@ -449,7 +601,19 @@ overstock_df = df_sku[df_sku["is_overstock"]].sort_values(
 
 total_capital_risk = float(overstock_df["capital_tied_up"].sum())
 flagged_skus = int(len(overstock_df))
-total_units_moved = int(df["inventory_quantity"].sum())
+total_units_analyzed = float(df["inventory_quantity"].sum())
+
+
+# =============================================================================
+# Sidebar data summary
+# =============================================================================
+st.sidebar.markdown("---")
+st.sidebar.caption(
+    f"Loaded {len(df_raw):,} records across {df_raw['product_id'].nunique():,} SKUs."
+)
+st.sidebar.caption(
+    f"Filtered period: {df['sales_date'].min():%b %Y} – {df['sales_date'].max():%b %Y}"
+)
 
 
 # =============================================================================
@@ -477,9 +641,9 @@ with m2:
 
 with m3:
     render_metric_card(
-        "Sales Volume Analyzed",
-        f"{total_units_moved:,} Units",
-        "Filtered sales volume",
+        "Inventory Quantity Analyzed",
+        f"{total_units_analyzed:,.0f} Units",
+        "Filtered dataset",
         "#166e2f",
         "#1e8a3c",
     )
@@ -517,18 +681,15 @@ with t1:
     c_a, c_b = st.columns(2)
 
     with c_a:
-        st.markdown(
-            """
-            <div class="apple-card">
-                <div class="section-title">Capital Tied Up in Low-Velocity Stock ($k)</div>
-                <div class="section-subtitle">Capital exposure from SKUs flagged as overstock.</div>
-            """,
-            unsafe_allow_html=True,
+        card_start(
+            "Capital Tied Up in Low-Velocity Stock ($k)",
+            "Capital exposure from SKUs flagged as overstock.",
         )
 
         cap_cat = (
             overstock_df.groupby("product_category", as_index=False)["capital_tied_up"]
             .sum()
+            .sort_values("capital_tied_up", ascending=False)
         )
         cap_cat["capital_k"] = cap_cat["capital_tied_up"] / 1000
 
@@ -541,20 +702,16 @@ with t1:
         )
         chart_layout(fig1, 300)
         st.plotly_chart(fig1, use_container_width=True, config={"displayModeBar": False})
-        st.markdown("</div>", unsafe_allow_html=True)
+        card_end()
 
     with c_b:
-        st.markdown(
-            """
-            <div class="apple-card">
-                <div class="section-title">Demand Volatility by Category (Std Dev σ)</div>
-                <div class="section-subtitle">Variation in inventory quantity across the filtered dataset.</div>
-            """,
-            unsafe_allow_html=True,
+        card_start(
+            "Demand Volatility by Category (Std Dev σ)",
+            "Variation in inventory quantity across the filtered dataset.",
         )
 
         fig2 = px.bar(
-            cat_stats,
+            cat_stats.sort_values("category_stdev", ascending=False),
             x="product_category",
             y="category_stdev",
             text_auto=".1f",
@@ -565,7 +722,11 @@ with t1:
         )
         chart_layout(fig2, 300)
         st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
-        st.markdown("</div>", unsafe_allow_html=True)
+        card_end()
+
+    st.caption(
+        "Note: the dashboard uses inventory_quantity as the demand/volume proxy because that is the measure available in the source query."
+    )
 
 
 # =============================================================================
@@ -573,14 +734,9 @@ with t1:
 # =============================================================================
 with t2:
     ratio_pct = int(overstock_ratio * 100)
-
-    st.markdown(
-        f"""
-        <div class="apple-card">
-            <div class="section-title">Low-Velocity Overstock Register</div>
-            <div class="section-subtitle">Flagged products with average demand below {ratio_pct}% of their category baseline.</div>
-        """,
-        unsafe_allow_html=True,
+    card_start(
+        "Low-Velocity Overstock Register",
+        f"Flagged products with average demand below {ratio_pct}% of their category baseline.",
     )
 
     if not overstock_df.empty:
@@ -618,20 +774,16 @@ with t2:
     else:
         st.info("No overstock products are flagged at the current threshold.")
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    card_end()
 
 
 # =============================================================================
-# TAB 3: Stockouts and customer satisfaction
+# TAB 3: Stockouts and reorder targets
 # =============================================================================
 with t3:
-    st.markdown(
-        f"""
-        <div class="apple-card">
-            <div class="section-title">Stockout Exposure & Reorder Targets</div>
-            <div class="section-subtitle">Grouped comparison of average daily demand and calculated reorder point at a {service_level} target service level.</div>
-        """,
-        unsafe_allow_html=True,
+    card_start(
+        "Stockout Exposure & Reorder Targets",
+        f"Calculated reorder targets using {service_level} and a {lead_time_days}-day supplier lead time.",
     )
 
     top_reorder = df_sku.sort_values("reorder_point", ascending=False).head(10).copy()
@@ -655,32 +807,28 @@ with t3:
             name="Reorder Point Target",
         )
     )
-    fig3.update_layout(
-        barmode="group",
-        legend=dict(orientation="h", y=1.1),
-    )
-    chart_layout(fig3, 340)
+    fig3.update_layout(barmode="group")
+    chart_layout(fig3, 360)
     st.plotly_chart(fig3, use_container_width=True, config={"displayModeBar": False})
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.info(
+        "This view estimates reorder targets from demand variability. It does not calculate actual customer satisfaction or confirmed stockout events because those fields are not present in the current SQL query."
+    )
+    card_end()
 
 
 # =============================================================================
 # TAB 4: Demand trends and macro drivers
 # =============================================================================
 with t4:
-    st.markdown(
-        """
-        <div class="apple-card">
-            <div class="section-title">Monthly Demand Trends</div>
-            <div class="section-subtitle">Historical inventory quantity by product category. The date range reflects the data currently stored in Azure SQL.</div>
-        """,
-        unsafe_allow_html=True,
+    card_start(
+        "Monthly Demand Trends",
+        "Historical inventory quantity by product category. The date range reflects the data currently stored in Azure SQL.",
     )
 
     trend_df = (
         df.groupby(
-            ["product_category", pd.Grouper(key="sales_date", freq="ME")],
+            ["product_category", pd.Grouper(key="sales_date", freq="M")],
             dropna=False,
         )["inventory_quantity"]
         .sum()
@@ -695,44 +843,52 @@ with t4:
         markers=True,
         labels={
             "sales_date": "Month",
-            "inventory_quantity": "Units Moved",
+            "inventory_quantity": "Units",
             "product_category": "Category",
         },
     )
     chart_layout(fig4, 340)
     st.plotly_chart(fig4, use_container_width=True, config={"displayModeBar": False})
 
-    # Macro-factor snapshot when the source columns contain usable values.
     macro_cols = ["gdp", "inflation_rate", "seasonal_factor"]
-    available_macro = [col for col in macro_cols if col in df.columns and df[col].notna().any()]
+    available_macro = [
+        col for col in macro_cols if col in df.columns and df[col].notna().any()
+    ]
 
     if available_macro:
         st.markdown(
             "<div style='font-weight:700; margin:12px 0 8px;'>Macro Driver Snapshot</div>",
             unsafe_allow_html=True,
         )
-        macro_summary = df[available_macro].describe().T[["mean", "min", "max"]].rename(
-            columns={"mean": "Average", "min": "Minimum", "max": "Maximum"}
+        macro_summary = (
+            df[available_macro]
+            .describe()
+            .T[["mean", "min", "max"]]
+            .rename(
+                columns={
+                    "mean": "Average",
+                    "min": "Minimum",
+                    "max": "Maximum",
+                }
+            )
         )
         st.dataframe(
             macro_summary.style.format("{:.3f}"),
             use_container_width=True,
         )
+    else:
+        st.caption("No usable macro-factor values are available for the current filters.")
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    card_end()
 
 
 # =============================================================================
 # TAB 5: Action plan and export
 # =============================================================================
 with t5:
-    st.markdown(
-        """
-        <div class="apple-card">
-            <div class="section-title">Procurement & Reorder Action List</div>
-            <div class="section-subtitle">Exportable procurement plan generated dynamically from the active filters, lead time and service-level assumptions.</div>
-        """,
-        unsafe_allow_html=True,
+    card_start(
+        "Procurement & Reorder Action List",
+        "Exportable procurement plan generated dynamically from the active filters, lead time and service-level assumptions.",
     )
 
     action_df = df_sku[
@@ -772,7 +928,6 @@ with t5:
         data=csv_data,
         file_name="TechElectro_Reorder_Action_List.csv",
         mime="text/csv",
-        use_container_width=False,
     )
 
     st.dataframe(
@@ -789,7 +944,7 @@ with t5:
         hide_index=True,
     )
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    card_end()
 
 
 # =============================================================================
