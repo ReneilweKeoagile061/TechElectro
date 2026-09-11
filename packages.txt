@@ -1,2 +1,3 @@
-﻿freetds-dev
-freetds-bin
+﻿freetds-bin
+freetds-dev
+tdsodbc
