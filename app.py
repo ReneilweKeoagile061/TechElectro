@@ -231,14 +231,36 @@ def _safe_error_message(exc: Exception) -> str:
 
 @st.cache_resource(show_spinner=False)
 def get_db_connection() -> Optional[pyodbc.Connection]:
-    """Create and cache an encrypted Azure SQL connection using ODBC Driver 18."""
+    """
+    Diagnostic connection function.
+    Priority 1 — Local SQL Server (Windows Integrated Auth, works offline/locally).
+    Priority 2 — Azure SQL via Streamlit secrets (used on Streamlit Community Cloud).
+    The real exception is surfaced via st.error() so deployment failures
+    can be diagnosed from the Streamlit Cloud UI and logs.
+    """
     global LAST_DB_ERROR
     LAST_DB_ERROR = None
 
+    # --- Priority 1: local SQL Server (no credentials needed, Windows auth) ---
+    for local_cs in [
+        "DRIVER={ODBC Driver 18 for SQL Server};SERVER=localhost;DATABASE=tech_electro;Trusted_Connection=yes;TrustServerCertificate=yes;Connection Timeout=5;",
+        "DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost;DATABASE=tech_electro;Trusted_Connection=yes;Connection Timeout=5;",
+    ]:
+        try:
+            conn = pyodbc.connect(local_cs, timeout=5)
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+            return conn
+        except Exception:
+            continue
+
+    # --- Priority 2: Azure SQL from Streamlit secrets ---
     server, database, username, password = _get_sql_config()
 
     if not all([server, database, username, password]):
-        LAST_DB_ERROR = "One or more Azure SQL connection settings are missing."
+        LAST_DB_ERROR = "Azure SQL secrets not configured (server / database / username / password missing)."
+        st.error(f"[DB] {LAST_DB_ERROR}")
         return None
 
     connection_string = (
@@ -251,17 +273,16 @@ def get_db_connection() -> Optional[pyodbc.Connection]:
         "TrustServerCertificate=no;"
         "Connection Timeout=15;"
     )
-
     try:
-        connection = pyodbc.connect(connection_string, timeout=15)
-        # Lightweight validation prevents a stale cached connection from being
-        # treated as healthy when the underlying TCP connection has disappeared.
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT 1")
-            cursor.fetchone()
-        return connection
+        conn = pyodbc.connect(connection_string, timeout=15)
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        return conn
     except Exception as exc:
         LAST_DB_ERROR = _safe_error_message(exc)
+        # Surfaces the REAL error in the UI — remove the line below once root cause is identified.
+        st.error(f"[DB] Azure SQL connection failed — {type(exc).__name__}: {LAST_DB_ERROR}")
         return None
 
 
@@ -336,6 +357,8 @@ def load_data() -> Optional[pd.DataFrame]:
 
     except Exception as exc:
         LAST_QUERY_ERROR = _safe_error_message(exc)
+        # Surface the REAL query error — remove the line below after diagnosis.
+        st.error(f"[Query] SQL query failed — {type(exc).__name__}: {LAST_QUERY_ERROR}")
         return None
 
 
