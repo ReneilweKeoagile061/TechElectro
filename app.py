@@ -157,48 +157,20 @@ st.markdown(
 def _get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
     """Read a flat Streamlit secret, with an environment-variable fallback."""
     try:
-        value = st.secrets.get(name)
-        if value not in (None, ""):
-            return str(value)
+        if name in st.secrets:
+            val = st.secrets[name]
+            if val is not None:
+                return str(val)
     except Exception:
         pass
     return os.getenv(name, default)
 
 
 def _get_sql_config() -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
-    """Return Azure SQL connection settings.
-
-    Supports the recommended flat Streamlit Secrets format:
-        server = "your-server.database.windows.net"
-        database = "tech_electro"
-        username = "your-login"
-        password = "your-password"
-
-    Also supports the older/nested format:
-        [azure_sql]
-        server = "..."
-        database = "..."
-        username = "..."
-        password = "..."
-    """
-    server = database = username = password = None
-
-    try:
-        sql_cfg = st.secrets.get("azure_sql", {})
-        if hasattr(sql_cfg, "get"):
-            server = sql_cfg.get("server")
-            database = sql_cfg.get("database")
-            username = sql_cfg.get("username")
-            password = sql_cfg.get("password")
-    except Exception:
-        pass
-
-    server = server or _get_secret("server") or _get_secret("AZURE_SQL_SERVER")
-    database = database or _get_secret("database", "tech_electro") or _get_secret(
-        "AZURE_SQL_DATABASE", "tech_electro"
-    )
-    username = username or _get_secret("username") or _get_secret("AZURE_SQL_USERNAME")
-    password = password or _get_secret("password") or _get_secret("AZURE_SQL_PASSWORD")
+    server = _get_secret("server") or _get_secret("AZURE_SQL_SERVER")
+    database = _get_secret("database", "tech_electro") or _get_secret("AZURE_SQL_DATABASE", "tech_electro")
+    username = _get_secret("username") or _get_secret("AZURE_SQL_USERNAME")
+    password = _get_secret("password") or _get_secret("AZURE_SQL_PASSWORD")
 
     return server, database, username, password
 
