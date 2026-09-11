@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import pyodbc
+import pymssql
 import streamlit as st
 
 
@@ -176,26 +176,22 @@ def _get_sql_config() -> tuple[Optional[str], Optional[str], Optional[str], Opti
 
 
 @st.cache_resource(show_spinner=False)
-def get_db_connection() -> Optional[pyodbc.Connection]:
-    """Create and cache an encrypted Azure SQL connection."""
+def get_db_connection() -> Optional["pymssql.Connection"]:
+    """Create and cache an encrypted Azure SQL connection via FreeTDS (pymssql)."""
     server, database, username, password = _get_sql_config()
 
     if not all([server, database, username, password]):
         return None
 
-    connection_string = (
-        "DRIVER={ODBC Driver 18 for SQL Server};"
-        f"SERVER={server};"
-        f"DATABASE={database};"
-        f"UID={username};"
-        f"PWD={password};"
-        "Encrypt=yes;"
-        "TrustServerCertificate=no;"
-        "Connection Timeout=15;"
-    )
-
     try:
-        return pyodbc.connect(connection_string, timeout=15)
+        return pymssql.connect(
+            server=server,
+            user=username,
+            password=password,
+            database=database,
+            timeout=15,
+            login_timeout=15,
+        )
     except Exception:
         return None
 
@@ -321,7 +317,7 @@ if df_raw is None:
     else:
         st.error(
             "The Azure SQL connection could not be established. Check the server name, "
-            "credentials, database permissions, ODBC driver, and Azure SQL firewall rules."
+            "credentials, database permissions, and Azure SQL firewall rules."
         )
     st.stop()
 
