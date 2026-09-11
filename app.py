@@ -242,13 +242,16 @@ def get_db_connection() -> Optional[pyodbc.Connection]:
 
     # --- Priority 1: Azure SQL ---
     if all([server, database, username, password]):
+        # Ensure server string uses tcp: and ,1433 format for Azure
+        srv_formatted = server if "tcp:" in server else f"tcp:{server},1433"
+        
         azure_attempts = [
-            f"DRIVER={{ODBC Driver 18 for SQL Server}};SERVER={server};DATABASE={database};UID={username};PWD={password};Encrypt=yes;TrustServerCertificate=no;Connection Timeout=15;",
-            f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={database};UID={username};PWD={password};Encrypt=yes;TrustServerCertificate=no;Connection Timeout=15;"
+            f"DRIVER={{ODBC Driver 18 for SQL Server}};SERVER={srv_formatted};DATABASE={database};UID={username};PWD={password};Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;",
+            f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={srv_formatted};DATABASE={database};UID={username};PWD={password};Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
         ]
         for cs in azure_attempts:
             try:
-                conn = pyodbc.connect(cs, timeout=15)
+                conn = pyodbc.connect(cs, timeout=30)
                 with conn.cursor() as cur:
                     cur.execute("SELECT 1")
                     cur.fetchone()
