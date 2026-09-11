@@ -5,16 +5,8 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import pyodbc
 import streamlit as st
-
-# pymssql works on both Linux (Streamlit Cloud) and Windows.
-# pyodbc is used as a local-only fallback when pymssql is unavailable.
-try:
-    import pymssql
-    _USE_PYMSSQL = True
-except ImportError:
-    import pyodbc
-    _USE_PYMSSQL = False
 
 
 # =============================================================================
