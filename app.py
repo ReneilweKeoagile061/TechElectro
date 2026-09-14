@@ -548,7 +548,7 @@ search_sku = st.sidebar.text_input(
     placeholder="e.g. 9402",
 )
 
-if st.sidebar.button("Refresh Data", use_container_width=True):
+if st.sidebar.button("Refresh Data", width="stretch"):
     load_data.clear()
     get_db_connection.clear()
     st.rerun()
@@ -722,7 +722,7 @@ with t1:
             labels={"product_category": "Category", "capital_k": "Capital ($k)"},
         )
         chart_layout(fig1, 300)
-        st.plotly_chart(fig1, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(fig1, width="stretch", config={"displayModeBar": False})
         card_end()
 
     with c_b:
@@ -742,7 +742,7 @@ with t1:
             },
         )
         chart_layout(fig2, 300)
-        st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(fig2, width="stretch", config={"displayModeBar": False})
         card_end()
 
     st.caption(
@@ -789,7 +789,7 @@ with t2:
                     "Capital Tied Up ($)": "${:,.2f}",
                 }
             ),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
     else:
@@ -830,7 +830,7 @@ with t3:
     )
     fig3.update_layout(barmode="group")
     chart_layout(fig3, 360)
-    st.plotly_chart(fig3, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig3, width="stretch", config={"displayModeBar": False})
 
     st.info(
         "This view estimates reorder targets from demand variability. It does not calculate actual customer satisfaction or confirmed stockout events because those fields are not present in the current SQL query."
@@ -849,7 +849,7 @@ with t4:
 
     trend_df = (
         df.groupby(
-            ["product_category", pd.Grouper(key="sales_date", freq="M")],
+            ["product_category", pd.Grouper(key="sales_date", freq="ME")],
             dropna=False,
         )["inventory_quantity"]
         .sum()
@@ -869,7 +869,7 @@ with t4:
         },
     )
     chart_layout(fig4, 340)
-    st.plotly_chart(fig4, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig4, width="stretch", config={"displayModeBar": False})
 
     macro_cols = ["gdp", "inflation_rate", "seasonal_factor"]
     available_macro = [
@@ -895,7 +895,7 @@ with t4:
         )
         st.dataframe(
             macro_summary.style.format("{:.3f}"),
-            use_container_width=True,
+            width="stretch",
         )
     else:
         st.caption("No usable macro-factor values are available for the current filters.")
@@ -961,7 +961,7 @@ with t5:
                 "Capital Tied Up ($)": "${:,.2f}",
             }
         ),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
