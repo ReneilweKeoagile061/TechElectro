@@ -39,7 +39,7 @@ jobs:
           PYTHONPATH: .
 
       - name: Run Azure smoke test
-        if: ${{ secrets.AZURE_SQL_SERVER != '' }}
+        if: secrets.AZURE_SQL_SERVER != ''
         run: pytest tests/test_azure_connection.py -v
         env:
           PYTHONPATH: .
