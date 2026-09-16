@@ -30,14 +30,17 @@ def save(filename):
 
 
 # -- 1. Demand Volatility by Category -----------------------------------------
-df = pd.read_sql("""
+df = pd.read_sql(
+    """
     SELECT p.product_category,
            STDEV(s.inventory_quantity) AS category_stdev
     FROM   sales_data s
     JOIN   product_information p ON s.product_id = p.product_id
     GROUP  BY p.product_category
     ORDER  BY category_stdev DESC
-""", conn)
+""",
+    conn,
+)
 
 fig, ax = plt.subplots(figsize=(8, 5))
 ax.bar(df["product_category"], df["category_stdev"], color=DARK)
@@ -48,7 +51,8 @@ save("chart1_category_volatility.png")
 
 
 # -- 2. Capital Tied Up in Low-Velocity Stock ----------------------------------
-df = pd.read_sql("""
+df = pd.read_sql(
+    """
     WITH category_stats AS (
         SELECT p.product_category,
                AVG(CAST(s.inventory_quantity AS FLOAT)) AS category_avg_demand
@@ -70,7 +74,9 @@ df = pd.read_sql("""
     FROM   flagged
     GROUP  BY product_category
     ORDER  BY total_capital_tied_up DESC
-""", conn)
+""",
+    conn,
+)
 
 fig, ax = plt.subplots(figsize=(8, 5))
 ax.bar(df["product_category"], df["total_capital_tied_up"], color=RED)
@@ -81,7 +87,8 @@ save("chart2_overstock_capital.png")
 
 
 # -- 3. Monthly Demand Trend by Category --------------------------------------
-df = pd.read_sql("""
+df = pd.read_sql(
+    """
     SELECT p.product_category,
            DATEFROMPARTS(YEAR(s.sales_date), MONTH(s.sales_date), 1) AS month_start,
            SUM(s.inventory_quantity) AS total_units_moved
@@ -89,7 +96,9 @@ df = pd.read_sql("""
     JOIN   product_information p ON s.product_id = p.product_id
     GROUP  BY p.product_category, DATEFROMPARTS(YEAR(s.sales_date), MONTH(s.sales_date), 1)
     ORDER  BY p.product_category, month_start
-""", conn)
+""",
+    conn,
+)
 
 fig, ax = plt.subplots(figsize=(10, 6))
 for cat, grp in df.groupby("product_category"):
@@ -102,7 +111,8 @@ save("chart3_demand_trend.png")
 
 
 # -- 4. Top 10 Highest Reorder-Point Products ---------------------------------
-df = pd.read_sql("""
+df = pd.read_sql(
+    """
     WITH category_stats AS (
         SELECT p.product_category,
                STDEV(s.inventory_quantity) AS category_stdev
@@ -120,11 +130,16 @@ df = pd.read_sql("""
     JOIN   category_stats cs ON p.product_category = cs.product_category
     GROUP  BY s.product_id, p.product_category, cs.category_stdev
     ORDER  BY reorder_point DESC
-""", conn)
+""",
+    conn,
+)
 
 fig, ax = plt.subplots(figsize=(8, 6))
-ax.barh([f"{r.product_id} ({r.product_category})" for r in df.itertuples()],
-        df["reorder_point"], color=BLUE)
+ax.barh(
+    [f"{r.product_id} ({r.product_category})" for r in df.itertuples()],
+    df["reorder_point"],
+    color=BLUE,
+)
 ax.invert_yaxis()
 ax.set_title("Top 10 Highest-Priority Reorder Products")
 ax.set_xlabel("Reorder Point (units)")
@@ -132,22 +147,35 @@ save("chart4_top10_reorder.png")
 
 
 # -- 5. Promotion Impact on Average Demand ------------------------------------
-df = pd.read_sql("""
+df = pd.read_sql(
+    """
     SELECT p.promotions,
            AVG(CAST(s.inventory_quantity AS FLOAT)) AS avg_units_per_sale,
            COUNT(*) AS num_records
     FROM   sales_data s
     JOIN   product_information p ON s.product_id = p.product_id
     GROUP  BY p.promotions
-""", conn)
+""",
+    conn,
+)
 
 fig, ax = plt.subplots(figsize=(6, 5))
-bars = ax.bar(df["promotions"], df["avg_units_per_sale"],
-              color=[GREEN if p == "Yes" else "#7F8C8D" for p in df["promotions"]],
-              width=0.4)
+bars = ax.bar(
+    df["promotions"],
+    df["avg_units_per_sale"],
+    color=[GREEN if p == "Yes" else "#7F8C8D" for p in df["promotions"]],
+    width=0.4,
+)
 for bar in bars:
-    ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
-            f"{bar.get_height():.1f}", ha="center", va="bottom", fontsize=11, fontweight="bold")
+    ax.text(
+        bar.get_x() + bar.get_width() / 2,
+        bar.get_height() + 0.3,
+        f"{bar.get_height():.1f}",
+        ha="center",
+        va="bottom",
+        fontsize=11,
+        fontweight="bold",
+    )
 ax.set_title("Promotion Impact on Average Units Per Sale", fontsize=13, fontweight="bold")
 ax.set_ylabel("Avg Units Per Sale")
 ax.set_xlabel("Promotion Active")
@@ -156,7 +184,8 @@ save("chart5_promotion_impact.png")
 
 
 # -- 6. Average Demand by Seasonal Band ---------------------------------------
-df = pd.read_sql("""
+df = pd.read_sql(
+    """
     SELECT CASE
                WHEN e.seasonal_factor < 0.95  THEN 'Low Season'
                WHEN e.seasonal_factor <= 1.05 THEN 'Normal'
@@ -171,7 +200,9 @@ df = pd.read_sql("""
                   WHEN e.seasonal_factor <= 1.05 THEN 'Normal'
                   ELSE 'High Season'
               END
-""", conn)
+""",
+    conn,
+)
 
 df["season_band"] = pd.Categorical(
     df["season_band"], categories=["Low Season", "Normal", "High Season"], ordered=True
@@ -179,12 +210,18 @@ df["season_band"] = pd.Categorical(
 df = df.sort_values("season_band")
 
 fig, ax = plt.subplots(figsize=(7, 5))
-bars = ax.bar(df["season_band"], df["avg_units_per_sale"],
-              color=["#5DADE2", "#F0B27A", RED], width=0.5)
+bars = ax.bar(
+    df["season_band"], df["avg_units_per_sale"], color=["#5DADE2", "#F0B27A", RED], width=0.5
+)
 for bar, row in zip(bars, df.itertuples()):
-    ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.2,
-            f"{row.avg_units_per_sale:.1f}\n(n={row.num_records})",
-            ha="center", va="bottom", fontsize=9)
+    ax.text(
+        bar.get_x() + bar.get_width() / 2,
+        bar.get_height() + 0.2,
+        f"{row.avg_units_per_sale:.1f}\n(n={row.num_records})",
+        ha="center",
+        va="bottom",
+        fontsize=9,
+    )
 ax.set_title("Average Demand by Seasonal Band", fontsize=13, fontweight="bold")
 ax.set_ylabel("Avg Units Per Sale")
 ax.set_xlabel("Season Band")
@@ -193,7 +230,8 @@ save("chart6_seasonal_demand_bands.png")
 
 
 # -- 7. Stockout Risk: Top 10 High-Demand Products ----------------------------
-df = pd.read_sql("""
+df = pd.read_sql(
+    """
     WITH category_stats AS (
         SELECT p.product_category,
                STDEV(s.inventory_quantity) AS category_stdev
@@ -212,23 +250,29 @@ df = pd.read_sql("""
     JOIN   category_stats cs ON p.product_category = cs.product_category
     GROUP  BY s.product_id, p.product_category, cs.category_stdev
     ORDER  BY avg_demand DESC
-""", conn)
+""",
+    conn,
+)
 
 x = range(len(df))
 fig, ax = plt.subplots(figsize=(10, 6))
-ax.bar(x, df["reorder_point"], color=RED,   alpha=0.75, label="Reorder Point")
-ax.bar(x, df["avg_demand"],    color=GREEN, alpha=0.9,  label="Avg Daily Demand")
+ax.bar(x, df["reorder_point"], color=RED, alpha=0.75, label="Reorder Point")
+ax.bar(x, df["avg_demand"], color=GREEN, alpha=0.9, label="Avg Daily Demand")
 ax.set_xticks(list(x))
-ax.set_xticklabels([f"ID {r.product_id}\n({r.product_category[:4]})" for r in df.itertuples()],
-                   fontsize=8)
-ax.set_title("Top 10 High-Demand Products \u2014 Stockout Risk Profile", fontsize=13, fontweight="bold")
+ax.set_xticklabels(
+    [f"ID {r.product_id}\n({r.product_category[:4]})" for r in df.itertuples()], fontsize=8
+)
+ax.set_title(
+    "Top 10 High-Demand Products \u2014 Stockout Risk Profile", fontsize=13, fontweight="bold"
+)
 ax.set_ylabel("Units")
 ax.legend()
 save("chart7_understocking_risk.png")
 
 
 # -- 8. Stock Turnover Proxy vs. Unit Cost (dual-axis) ------------------------
-df = pd.read_sql("""
+df = pd.read_sql(
+    """
     SELECT p.product_category,
            ROUND(CAST(SUM(s.inventory_quantity) AS FLOAT)
                  / COUNT(DISTINCT s.product_id), 1) AS avg_units_per_product,
@@ -237,7 +281,9 @@ df = pd.read_sql("""
     JOIN   product_information p ON s.product_id = p.product_id
     GROUP  BY p.product_category
     ORDER  BY avg_units_per_product DESC
-""", conn)
+""",
+    conn,
+)
 
 x = range(len(df))
 fig, ax1 = plt.subplots(figsize=(8, 5))
@@ -248,7 +294,9 @@ ax1.set_ylabel("Avg Units Moved per SKU", color=BLUE)
 ax1.tick_params(axis="y", labelcolor=BLUE)
 
 ax2 = ax1.twinx()
-ax2.plot(list(x), df["avg_unit_cost"], color=ORANGE, marker="o", linewidth=2, label="Avg Unit Cost ($)")
+ax2.plot(
+    list(x), df["avg_unit_cost"], color=ORANGE, marker="o", linewidth=2, label="Avg Unit Cost ($)"
+)
 ax2.set_ylabel("Avg Unit Cost ($)", color=ORANGE)
 ax2.tick_params(axis="y", labelcolor=ORANGE)
 
@@ -260,7 +308,8 @@ save("chart8_turnover_by_category.png")
 
 
 # -- 9. Monthly Demand vs. Inflation Rate -------------------------------------
-df = pd.read_sql("""
+df = pd.read_sql(
+    """
     SELECT DATEFROMPARTS(YEAR(s.sales_date), MONTH(s.sales_date), 1) AS month_start,
            AVG(CAST(e.inflation_rate AS FLOAT)) AS avg_inflation,
            SUM(s.inventory_quantity)            AS total_units_moved
@@ -268,17 +317,27 @@ df = pd.read_sql("""
     JOIN   external_factors e ON s.sales_date = e.sales_date
     GROUP  BY DATEFROMPARTS(YEAR(s.sales_date), MONTH(s.sales_date), 1)
     ORDER  BY month_start
-""", conn)
+""",
+    conn,
+)
 
 fig, ax1 = plt.subplots(figsize=(12, 5))
 ax1.fill_between(df["month_start"], df["total_units_moved"], color=BLUE, alpha=0.2)
-ax1.plot(df["month_start"], df["total_units_moved"], color=BLUE, linewidth=1.8, label="Total Units Moved")
+ax1.plot(
+    df["month_start"], df["total_units_moved"], color=BLUE, linewidth=1.8, label="Total Units Moved"
+)
 ax1.set_ylabel("Total Units Moved", color=BLUE)
 ax1.tick_params(axis="y", labelcolor=BLUE)
 
 ax2 = ax1.twinx()
-ax2.plot(df["month_start"], df["avg_inflation"], color=RED, linewidth=1.5,
-         linestyle="--", label="Avg Inflation Rate (%)")
+ax2.plot(
+    df["month_start"],
+    df["avg_inflation"],
+    color=RED,
+    linewidth=1.5,
+    linestyle="--",
+    label="Avg Inflation Rate (%)",
+)
 ax2.set_ylabel("Inflation Rate (%)", color=RED)
 ax2.tick_params(axis="y", labelcolor=RED)
 

@@ -1,0 +1,36 @@
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  \.venv
+  | \.venv-1
+  | __pycache__
+)/
+'''
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.flake8]
+max-line-length = 100
+extend-ignore = [
+    "E203",  # whitespace before ':' (conflicts with black)
+    "W503",  # line break before binary operator
+]
+exclude = [
+    ".venv",
+    ".venv-1",
+    "__pycache__",
+    ".git",
+]
+per-file-ignores = [
+    "app.py:E501",          # long SQL strings in app.py
+    "generate_charts.py:E501",
+]
+

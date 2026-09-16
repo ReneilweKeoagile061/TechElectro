@@ -8,7 +8,6 @@ import plotly.graph_objects as go
 import pyodbc
 import streamlit as st
 
-
 # =============================================================================
 # Page configuration
 # =============================================================================
@@ -203,10 +202,7 @@ def _get_sql_config() -> Tuple[Optional[str], Optional[str], Optional[str], Opti
 
     server = server or _get_secret("server") or _get_secret("AZURE_SQL_SERVER")
     database = (
-        database
-        or _get_secret("database")
-        or _get_secret("AZURE_SQL_DATABASE")
-        or "tech_electro"
+        database or _get_secret("database") or _get_secret("AZURE_SQL_DATABASE") or "tech_electro"
     )
     username = username or _get_secret("username") or _get_secret("AZURE_SQL_USERNAME")
     password = password or _get_secret("password") or _get_secret("AZURE_SQL_PASSWORD")
@@ -244,10 +240,10 @@ def get_db_connection() -> Optional[pyodbc.Connection]:
     if all([server, database, username, password]):
         # Ensure server string uses tcp: and ,1433 format for Azure
         srv_formatted = server if "tcp:" in server else f"tcp:{server},1433"
-        
+
         azure_attempts = [
             f"DRIVER={{ODBC Driver 18 for SQL Server}};SERVER={srv_formatted};DATABASE={database};UID={username};PWD={password};Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;",
-            f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={srv_formatted};DATABASE={database};UID={username};PWD={password};Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
+            f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={srv_formatted};DATABASE={database};UID={username};PWD={password};Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;",
         ]
         for cs in azure_attempts:
             try:
@@ -259,9 +255,11 @@ def get_db_connection() -> Optional[pyodbc.Connection]:
             except Exception as exc:
                 LAST_DB_ERROR = _safe_error_message(exc)
                 continue
-        
+
         # If we exhausted Azure attempts, log the last failure
-        st.error(f"[DB] Azure SQL connection failed (tried Driver 18 & 17). Last error: {LAST_DB_ERROR}")
+        st.error(
+            f"[DB] Azure SQL connection failed (tried Driver 18 & 17). Last error: {LAST_DB_ERROR}"
+        )
         return None
 
     # --- Priority 2: Localhost fallback ---
@@ -328,7 +326,9 @@ def load_data() -> Optional[pd.DataFrame]:
         }
         missing = required_columns.difference(df.columns)
         if missing:
-            LAST_QUERY_ERROR = f"The SQL query did not return required columns: {', '.join(sorted(missing))}."
+            LAST_QUERY_ERROR = (
+                f"The SQL query did not return required columns: {', '.join(sorted(missing))}."
+            )
             return None
 
         df["sales_date"] = pd.to_datetime(df["sales_date"], errors="coerce")
@@ -607,18 +607,12 @@ df_sku = df_sku.merge(
 
 df_sku["sku_cost"] = df_sku["sku_cost"].fillna(0)
 df_sku["capital_tied_up"] = df_sku["sku_demand"] * df_sku["sku_cost"]
-df_sku["is_overstock"] = df_sku["sku_demand"] < (
-    df_sku["avg_demand"] * overstock_ratio
-)
+df_sku["is_overstock"] = df_sku["sku_demand"] < (df_sku["avg_demand"] * overstock_ratio)
 df_sku["lead_time_demand"] = df_sku["sku_demand"] * lead_time_days
-df_sku["safety_stock"] = (
-    z_score * df_sku["category_stdev"] * np.sqrt(lead_time_days)
-)
+df_sku["safety_stock"] = z_score * df_sku["category_stdev"] * np.sqrt(lead_time_days)
 df_sku["reorder_point"] = df_sku["lead_time_demand"] + df_sku["safety_stock"]
 
-overstock_df = df_sku[df_sku["is_overstock"]].sort_values(
-    "capital_tied_up", ascending=False
-)
+overstock_df = df_sku[df_sku["is_overstock"]].sort_values("capital_tied_up", ascending=False)
 
 total_capital_risk = float(overstock_df["capital_tied_up"].sum())
 flagged_skus = int(len(overstock_df))
@@ -872,9 +866,7 @@ with t4:
     st.plotly_chart(fig4, width="stretch", config={"displayModeBar": False})
 
     macro_cols = ["gdp", "inflation_rate", "seasonal_factor"]
-    available_macro = [
-        col for col in macro_cols if col in df.columns and df[col].notna().any()
-    ]
+    available_macro = [col for col in macro_cols if col in df.columns and df[col].notna().any()]
 
     if available_macro:
         st.markdown(
