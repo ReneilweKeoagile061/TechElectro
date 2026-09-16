@@ -4,7 +4,7 @@
 Data-driven inventory optimization project for TechElectro Inc., addressing overstocking, understocking, and customer satisfaction risk through Azure SQL cloud analytics, an interactive Streamlit dashboard, and a production-grade DevOps pipeline.
 
 ## 🚀 Live Application
-**Dashboard:** [Insert Streamlit Cloud URL once deployed]  
+**Dashboard:**  https://techelectro.streamlit.app/
 **Database:** Hosted on Azure SQL Server (Serverless)
 
 ---
