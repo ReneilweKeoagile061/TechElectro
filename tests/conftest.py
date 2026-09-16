@@ -3,7 +3,6 @@ tests/conftest.py
 Shared pytest fixtures for TechElectro Inventory Analytics Engine.
 """
 
-import numpy as np
 import pandas as pd
 import pytest
 

@@ -33,7 +33,7 @@ jobs:
         run: black --check --line-length 100 app.py generate_charts.py tests/
 
       - name: Lint (flake8)
-        run: flake8 app.py generate_charts.py tests/
+        run: flake8 --extend-ignore=E501,E203,W503 app.py generate_charts.py tests/
 
       - name: Run unit tests
         run: pytest tests/ -v --ignore=tests/test_azure_connection.py

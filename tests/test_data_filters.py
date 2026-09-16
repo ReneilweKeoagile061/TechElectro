@@ -4,9 +4,6 @@ Unit tests for sidebar filter logic — category, promotion, and SKU search.
 All tests run in-memory, no database required.
 """
 
-import pandas as pd
-import pytest
-
 
 def apply_category_filter(df, selected_categories):
     return df[df["product_category"].isin(selected_categories)].copy()
