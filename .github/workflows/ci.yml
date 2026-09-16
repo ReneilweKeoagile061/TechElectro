@@ -10,6 +10,8 @@ jobs:
   quality:
     name: Code Quality & Tests
     runs-on: ubuntu-latest
+    env:
+      HAS_AZURE_SECRET: ${{ secrets.AZURE_SQL_SERVER != '' }}
 
     steps:
       - name: Checkout code
@@ -39,7 +41,7 @@ jobs:
           PYTHONPATH: .
 
       - name: Run Azure smoke test
-        if: secrets.AZURE_SQL_SERVER != ''
+        if: env.HAS_AZURE_SECRET == 'true'
         run: pytest tests/test_azure_connection.py -v
         env:
           PYTHONPATH: .
